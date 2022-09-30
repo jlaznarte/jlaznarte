@@ -1,0 +1,86 @@
+# Created 2022-09-30 vie 18:38
+#+title: Configurar isync/mbsync con OAuth2.0 en el correo Office365 de la UNED
+#+author: jose
+
+Referencias:
+
+https://www.vanormondt.net/~peter/blog/2021-03-16-mutt-office365-mfa.html
+
+https://www.mail-archive.com/mutt-dev@mutt.org/msg14368.html
+
+https://unix.stackexchange.com/questions/625637/configuring-mbsync-with-authmech-xoauth2
+
+Para configurar isync/mbsync con OAuth2.0:
+
+* 1. Instalar el plugin de SASL para OAuth
+
+** 1.1. Clonar las fuentes de Cyrus SASL OAuth2
+~git clone https://github.com/moriyoshi/cyrus-sasl-xoauth2.git~
+
+** 1.2. Configurar y compilar
+~cd cyrus-sasl-xoauth2~
+
+~./autogen.sh~
+
+~./configure~
+
+Las bibliotecas SASL2 en Ubuntu están en //usr/lib/x86_64-linux-gnu/, es necesario modificar el Makefile para que lo tenga en cuenta.
+
+~sed -i 's%pkglibdir = ${CYRUS_SASL_PREFIX}/lib/sasl2%pkglibdir = ${CYRUS_SASL_PREFIX}/lib/x86_64-linux-gnu/sasl2%' Makefile~
+
+~make~
+
+~sudo make install~
+
+** 1.3. Verificar que SASL conoce a XOAUTH2
+~saslpluginviewer | grep XOAUTH2~
+
+* 2. Asegurarse de que isync/mbsync está instalado y actualizado (probado con la versión 1.4.4)
+
+Una llamada a:
+
+~mbsync --help |grep -b1 HAVE_LIBSASL~
+
+Debe devolver, entre otras cosas, ~+HAVE_LIBSASL~, con el signo "+" delante.
+
+* 3. Descargar el script que tomaremos prestado de mutt:
+
+~wget https://gitlab.com/muttmua/mutt/-/blob/master/contrib/mutt_oauth2.py~
+
+~chmod +x mutt_oauth2.py~
+
+* 4. Modificar el script:
+
+L47: reemplazar YOUR_GPG_IDENTITY por el correo electrónico asociado a la identidad de firma en GPG (sí, hay que tener GPG configurado previamente; la identidad puede averiguarse con ~gpg --list-secret-keys~).
+
+L77: ~'client_id': '20460e5d-ce91-49af-a3a5-70b6be7486d1',~ (usaremos el código del gestor de correo Evolution, que está autorizado por la UNED para usar claves OAuth2).
+
+* 5. Usar el script para obtener un token de refresco:
+
+~./mutt_oauth2.py uned.es.token --verbose --authorize~
+
+El script nos pregunta una serie de cosas. Las respuestas que funcionan son, en nuestro caso, por este orden, "microsoft", "authcode", la dirección de correo para la que queremos configurar el correo.
+
+A continuación, el script nos proporciona una URL que hay que visitar con un navegador. El resultado, tras hacer login en la UNED, es una página web en blanco, pero lo que nos interesa es la URL de la misma. La copiamos. Tendrá esta pinta:
+
+https://login.microsoftonline.com/common/oauth2/nativeclient?code={código_hexadecimal_1}&session_state={código_hexadecimal_2}
+
+Nos interesa el código hexadecimal 1. Lo copiamos al portapapeles y lo pegamos en el prompt del script, que nos está esperando pacientemente. Como resultado, el script termina, y el fichero ~uned.es.token~ ha sido actualizado con el token de refresco. Nos aseguramos de que ese fichero no tiene permisos de lectura para nadie más que para el usuario (~chmod 600 uned.es.token~).
+
+* 6. Ya podemos obtener tókens para identificarnos
+
+Ahora podemos usar el mismo script para que nos entregue tókens válidos para ser usados, junto al nombre de usuario (que en este caso es la dirección de correo propiamente, no diaXXXXX@dia.uned.es, como antes):
+
+~./mutt_oauth2.py uned.es.token~
+
+
+* 7. Usamos esta llamada para realizar la identificación en nuestros scripts
+
+Por ejemplo, en ~.mbsyncr~, añadimos lo siguiente:
+
+~AuthMechs XOAUTH2~
+~PassCmd "/ubicación/de/mutt_oauth2.py /ubicación/de/uned.es.token"~
+
+Y ya podemos descargar el correo y sincronizar las carpetas usando OAuth2.0.
+
+El mismo procedimiento es válido para msmtp y para goimapnotify: la llamada a mutt_oauth2.py con el token de refresco reemplaza a la llamada a nuestro gestor de contraseñas (o a la contraseña misma).
